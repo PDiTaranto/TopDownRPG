@@ -6,6 +6,7 @@
 #include "AbilitySystemComponent.h"
 #include "AuraAbilityTypes.h"
 #include "Game/AuraGameModeBase.h"
+#include "Interaction/CombatInterface.h"
 #include "Kismet/GameplayStatics.h"
 #include "Player/AuraPlayerState.h"
 #include "UI/HUD/AuraHUD.h"
@@ -66,13 +67,23 @@ void UAuraAbilitySystemLibrary::InitializeDefaultAttributes(const UObject* World
 	ASC->ApplyGameplayEffectSpecToSelf(*VitalAttributesSpecHandle.Data.Get());
 }
 
-void UAuraAbilitySystemLibrary::GiveStartupAbilities(const UObject* WorldContextObject, UAbilitySystemComponent* ASC)
+void UAuraAbilitySystemLibrary::GiveStartupAbilities(const UObject* WorldContextObject, UAbilitySystemComponent* ASC,ECharacterClass CharacterClass)
 {
 	UCharacterClassInfo* CharacterClassInfo = GetCharacterClassInfo(WorldContextObject);
+	if (CharacterClassInfo == nullptr) return;
 	for (TSubclassOf<UGameplayAbility> AbilityClass : CharacterClassInfo->CommonAbilities)
 	{
 		FGameplayAbilitySpec AbilitySpec = FGameplayAbilitySpec(AbilityClass, 1);
 		ASC->GiveAbility(AbilitySpec);
+	}
+	const FCharacterClassDefaultInfo& DefaultInfo = CharacterClassInfo->GetClassDefaultInfo(CharacterClass);
+	for (TSubclassOf<UGameplayAbility> AbilityClass : DefaultInfo.StartupAbilities)
+	{
+		if (ICombatInterface* CombatInterface = Cast<ICombatInterface>(ASC->GetAvatarActor()))
+		{
+			FGameplayAbilitySpec AbilitySpec = FGameplayAbilitySpec(AbilityClass, CombatInterface->GetPlayerLevel());
+			ASC->GiveAbility(AbilitySpec);
+		}		
 	}
 }
 
@@ -116,4 +127,88 @@ void UAuraAbilitySystemLibrary::SetIsCriticalHit(FGameplayEffectContextHandle& E
 	{
 		AuraEffectContext->SetIsCriticalHit(bInIsCritical);
 	}
+}
+
+void UAuraAbilitySystemLibrary::GetLivePlayersWithinRadius(const UObject* WorldContextObject,
+	TArray<AActor*>& OutOverlappingActors, const TArray<AActor*>& ActorsToIgnore, float Radius,
+	const FVector& SphereOrigin)
+{
+	FCollisionQueryParams SphereParams;
+	SphereParams.AddIgnoredActors(ActorsToIgnore);
+
+	TArray<FOverlapResult> Overlaps;
+	if (UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull))
+	{
+		World->OverlapMultiByObjectType(Overlaps, SphereOrigin, FQuat::Identity, FCollisionObjectQueryParams(FCollisionObjectQueryParams::InitType::AllDynamicObjects), FCollisionShape::MakeSphere(Radius), SphereParams);
+		for (const FOverlapResult& Overlap : Overlaps)
+		{
+			if (AActor* OverlappedActor = Overlap.GetActor())
+			{
+				if (Overlap.GetActor()->Implements<UCombatInterface>() &&  !ICombatInterface::Execute_IsDead(Overlap.GetActor()))
+				{
+					OutOverlappingActors.AddUnique(ICombatInterface::Execute_GetAvatar(Overlap.GetActor()));
+				}
+			}
+		}
+	}
+}
+
+bool UAuraAbilitySystemLibrary::RandomArrayElement(const TArray<int32>&, int32&)
+{
+	checkNoEntry();
+	return false;
+}
+
+DEFINE_FUNCTION(UAuraAbilitySystemLibrary::execRandomArrayElement)
+{
+	Stack.MostRecentProperty = nullptr;
+	Stack.MostRecentPropertyAddress = nullptr;
+	
+	Stack.Step(Stack.Object, nullptr);
+	FArrayProperty* ArrayProp = CastField<FArrayProperty>(Stack.MostRecentProperty);
+	void* ArrayAddr = Stack.MostRecentPropertyAddress;
+
+	Stack.Step(Stack.Object, nullptr);
+	FProperty* ItemProp = Stack.MostRecentProperty;
+	void* ItemAddr = Stack.MostRecentPropertyAddress;
+
+	P_FINISH;
+
+	bool bSuccess = false;
+
+	P_NATIVE_BEGIN;
+
+	if (ArrayProp && ArrayAddr && ItemProp && ItemAddr)
+	{
+		FScriptArrayHelper ArrayHelper(ArrayProp, ArrayAddr);
+		const int32 Num = ArrayHelper.Num();
+
+		if (Num > 0)
+		{
+			const int32 Index = FMath::RandRange(0, Num - 1);
+			void* Src = ArrayHelper.GetRawPtr(Index);
+			ItemProp->CopyCompleteValue(ItemAddr, Src);
+			bSuccess = true;
+		}
+		else
+		{
+			ItemProp->InitializeValue(ItemAddr);
+			bSuccess = false;
+		}
+	}
+	else if (ItemProp && ItemAddr)
+	{
+		ItemProp->InitializeValue(ItemAddr);
+	}
+	*static_cast<bool*>(RESULT_PARAM) = bSuccess;
+
+	P_NATIVE_END;
+}
+
+bool UAuraAbilitySystemLibrary::IsNotFriend(AActor* FirstActor, AActor* SecondActor)
+{
+	const bool bBothArePlayers = FirstActor->ActorHasTag(FName("Player")) && SecondActor->ActorHasTag(FName("Player"));
+	const bool bBothAreEnemies = FirstActor->ActorHasTag(FName("Enemy")) && SecondActor->ActorHasTag(FName("Enemy"));
+	const bool bFriends = bBothArePlayers || bBothAreEnemies;
+	return !bFriends;	
 }
