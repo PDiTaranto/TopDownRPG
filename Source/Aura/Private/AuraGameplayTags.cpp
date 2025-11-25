@@ -165,11 +165,18 @@ void FAuraGameplayTags::InitializeNativeGameplayTags()
 		FString("Reduces Lightning Damage Taken")
 		);
 
-	
-
 	GameplayTags.Attributes_Resistances_Physical = UGameplayTagsManager::Get().AddNativeGameplayTag(
 		FName("Attributes.Resistances.Physical"),
 		FString("Reduces Physical Damage Taken")
+		);
+
+	/*
+	 * Meta Attributes
+	 */
+
+	GameplayTags.Attributes_Meta_IncomingXP = UGameplayTagsManager::Get().AddNativeGameplayTag(
+		FName("Attributes.Meta.IncomingXP"),
+		FString("Amount of XP to be granted to the character")
 		);
 
 	/*
